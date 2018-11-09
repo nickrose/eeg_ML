@@ -1,8 +1,9 @@
 """ some tools for plotting EEG data and doing visual comparison """
 from eeg_project.read_data import (my_read_eeg_generic, SAMP_FREQ,
-    pass_through, accumulate_subject_file_list, files_skip_processing)
+    pass_through, accumulate_subject_file_list, files_skip_processing,
+    sample_file_list, match_types)
 import numpy as np
-import os
+import pandas as pd
 from collections import defaultdict
 # from six import text_type
 import tqdm
@@ -12,10 +13,132 @@ from matplotlib import pyplot, cm
 from IPython.display import clear_output
 
 
-def plot_data_subject_dirs(data_dirs, file_list=None, labelby=None, limitby=None,
-        plots=None, figsize=None, transparency=1., yscale='linear', xrange=None,
-        yrange=None, force_axes_same_scale=True, process_data=pass_through,
-        limit_mult_files=np.inf, debug=1):
+def highlight_correlated_feature_twoclass(
+        file_samples=100,
+        match_types_in=match_types, figsize=(12, 14),
+        process_data=None, pca_vec_to_plot=5, debug=1):
+    """ sub-sample the data set and plot correlation information """
+    corr_accum = None
+    if process_data is not None:
+        data_type = '(frqeuency)'
+    else:
+        data_type = '(time-domain)'
+    for match_type in match_types_in:
+        for aidx, is_alcoholic in enumerate([True, False]):
+            corr_accum = cov_accum = None
+            if debug:
+                print(f'getting example data for match_type[{match_type}]'
+                    f' and is_alcoholic[{is_alcoholic}]')
+            file_list = sample_file_list(
+                    limitby=dict(
+                        match=match_type,
+                        alcoholic=is_alcoholic),
+                    limit_mult_files=file_samples,
+                    balance_types=[('subject', 10)], df_type='wide',
+                    seed=42, debug=max(0, debug - 1))
+
+            for file in tqdm.tqdm(file_list):
+                df, info = my_read_eeg_generic(
+                    file, orig_tt_indic=('test' in str.lower(file)))
+
+                corr = df.corr()
+                cov = df.cov().values
+                if corr_accum is None:
+                    sen_names = corr.columns.levels[
+                        corr.columns.names.index('sensor')]
+                    nsen = len(sen_names)
+                if process_data:
+                    x, Z, xl, yl = process_data([], df.values, '',
+                        '', fs=SAMP_FREQ)
+                    df = pd.DataFrame(Z)
+                    corr = df.corr()
+                    cov = df.cov().values
+                if corr_accum is None:
+                    corr_accum = corr.values
+                    cov_accum = cov/nsen
+                else:
+                    corr_accum += corr.values
+                    cov_accum += cov/nsen
+
+            corr_accum /= len(file_list)
+            if aidx == 0:
+                corr_alcoholic = corr_accum.copy()
+                cov_alcoholic = cov_accum.copy()
+            else:
+                corr_nonalch = corr_accum.copy()
+                cov_nonalch = cov_accum.copy()
+
+            if debug > 1:
+                pyplot.figure(figsize=figsize)
+                pyplot.pcolor(np.flipud(corr_accum))
+                pyplot.xticks(np.arange(nsen), sen_names)
+                pyplot.yticks(np.arange(nsen), reversed(sen_names))
+                pyplot.title(f'corr - across sensors {data_type} - '
+                    f'is_alcoholic[{is_alcoholic}] - match[{match_type}]')
+                pyplot.colorbar()
+                pyplot.show()
+
+        Ua, svs_a, Va = np.linalg.svd(cov_alcoholic, full_matrices=False,
+            compute_uv=True)
+        Una, svs_na, Vna = np.linalg.svd(cov_nonalch, full_matrices=False,
+            compute_uv=True)
+        print('SVec size', Una.shape)
+        # print(svs_a)
+        pyplot.figure(figsize=(figsize[0], 6))
+        leg = []
+        lg, = pyplot.plot(svs_a, label='alcoholic')
+        leg.append(lg)
+        lg, = pyplot.plot(svs_na, label='not alcoholic')
+        leg.append(lg)
+        pyplot.legend(handles=leg)
+        # pyplot.xticks(np.arange(nsen), sen_names)
+        # pyplot.yticks(np.arange(nsen), reversed(sen_names))
+        pyplot.title(f'PCA decomposition: SVs - across sensors {data_type} - '
+            f'- match[{match_type}]')
+        pyplot.show()
+
+        pyplot.figure(figsize=(figsize[0]+4, 6))
+        leg = []
+        pca_vec_to_plot = min(pca_vec_to_plot, nsen)
+        for idx in range(pca_vec_to_plot):
+            if idx == 0:
+                clrdict = {}
+            lg, = pyplot.plot(Ua[:, idx], label='alcoholic', **clrdict)
+            if idx == 0:
+                leg.append(lg)
+                clrdict = {'color': lg.get_color()}
+        for idx in range(pca_vec_to_plot):
+            if idx == 0:
+                clrdict = {}
+            lg, = pyplot.plot(Una[:, idx], label='not alcoholic',
+                **clrdict)
+            if idx == 0:
+                leg.append(lg)
+                clrdict = {'color': lg.get_color()}
+
+        pyplot.xticks(np.arange(nsen), sen_names)
+        pyplot.legend(handles=leg)
+        # pyplot.xticks(np.arange(nsen), sen_names)
+        # pyplot.yticks(np.arange(nsen), reversed(sen_names))
+        pyplot.title(f'PCA decomposition: first {pca_vec_to_plot} '
+            f'singular vectors - across sensors {data_type} - '
+            f'match[{match_type}]')
+
+        pyplot.figure(figsize=figsize)
+        pyplot.pcolor(np.flipud(corr_alcoholic - corr_nonalch))
+        pyplot.xticks(np.arange(nsen), sen_names)
+        pyplot.yticks(np.arange(nsen), reversed(sen_names))
+        pyplot.title(f'corr - across sensors {data_type} - '
+            f'(alcoholic-nonalcoholic) - match[{match_type}]')
+        pyplot.colorbar()
+        pyplot.show()
+
+
+def plot_data_subject_dirs(data_dirs=None, file_list=None,
+        labelby=None, limitby=None, plots=None, figsize=None,
+        transparency=1., yscale='linear', xrange=None,
+        yrange=None, force_axes_same_scale=True,
+        process_data=pass_through, limit_mult_files=np.inf, debug=1):
     """ plot EEG data by searching subject directories with some options """
     df_type = 'wide'
     if plots is None:
@@ -25,6 +148,8 @@ def plot_data_subject_dirs(data_dirs, file_list=None, labelby=None, limitby=None
     all_data_overlaid = ('all_data_traces' in plots and
             (plots['all_data_traces'] is not None))
     printed_entry_info = False
+    assert not((data_dirs is None) and (file_list is None)), ("need to provide "
+        "one of 'data_dirs' or 'file_list'")
     if file_list is None:
         file_list, unique_entries, total_files = accumulate_subject_file_list(
             data_dirs, limitby=limitby, limit_mult_files=limit_mult_files,

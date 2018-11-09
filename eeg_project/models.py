@@ -1,7 +1,107 @@
+import numpy as np
 import torch
 import torch.nn as nn
+from torch.autograd import Variable
 import torch.nn.functional as F
 import warnings
+from sklearn.metrics import (roc_auc_score, precision_score,
+    recall_score, accuracy_score, f1_score)
+
+metric_func_lut = dict(
+    acc=accuracy_score,
+    auc=roc_auc_score,
+    recall=recall_score,
+    precision=precision_score,
+    f_1_meas=f1_score
+)
+PRF_metrics = ['recall', 'precision', 'f_1_meas']
+basic_metrics = ['acc', 'auc']
+
+
+# def predict_multiclass_with_model(model, X, Y, params=["acc"], debug=1):
+#     results = []
+#     nsamples = X.shape[0]
+#     batch_size = int(2 * np.sqrt(nsamples))
+#     while (nsamples//batch_size) * batch_size != nsamples:
+#         batch_size += 1
+#     if debug > 1:
+#         print(f'selected batch size: {batch_size}')
+#
+#     if isinstance(Y, torch.Tensor):
+#         Y = Y.numpy()
+#     else:
+#         assert not(isinstance(X, torch.Tensor)), (
+#             "cannot have mixed torch.Tensor, and numpy types")
+#         X = torch.from_numpy(X)
+#
+#     predicted = []
+#     if nsamples > batch_size:
+#         for i in range(nsamples//batch_size):
+#             s = i*batch_size
+#             e = i*batch_size+batch_size
+#
+#             if isinstance(X, torch.Tensor):
+#                 inputs = Variable(X[s:e])
+#             else:
+#                 inputs = Variable(torch.from_numpy(X[s:e]))
+#
+#             pred = model(inputs)
+#             predicted = np.concatenate([predicted, pred.data.cpu().numpy()])
+#
+#         predicted = np.asarray(predicted)[:, 0]
+#
+#     else:
+#         inputs = Variable(X)
+#         predicted = model(inputs)
+#         predicted = predicted.data.cpu().numpy()
+#
+#     for param in params:
+#         metric_func = metric_func_lut[param]
+#         results.append(metric_func(Y, np.round(predicted)))
+#     return results
+
+
+def predict_twoclass_with_model(model, X, Y, params=["acc"], debug=1):
+    results = []
+    nsamples = X.shape[0]
+    batch_size = int(2 * np.sqrt(nsamples))
+    while (nsamples//batch_size) * batch_size != nsamples:
+        batch_size += 1
+    if debug > 1:
+        print(f'selected batch size: {batch_size}')
+
+    if isinstance(Y, torch.Tensor):
+        Y = Y.numpy()
+    else:
+        assert not(isinstance(X, torch.Tensor)), (
+            "cannot have mixed torch.Tensor, and numpy types")
+        X = torch.from_numpy(X)
+
+    predicted = []
+    if nsamples > batch_size:
+        for i in range(nsamples//batch_size):
+            s = i*batch_size
+            e = i*batch_size+batch_size
+
+            if isinstance(X, torch.Tensor):
+                inputs = Variable(X[s:e])
+            else:
+                inputs = Variable(torch.from_numpy(X[s:e]))
+
+            pred = model(inputs)
+            predicted.extend(pred.data.cpu().numpy().tolist())
+
+        predicted = np.asarray(predicted)[:, 0]
+
+    else:
+        inputs = Variable(X)
+        predicted = model(inputs)
+        predicted = predicted.data.cpu().numpy()
+
+    for param in params:
+        metric_func = metric_func_lut[param]
+        results.append(metric_func(Y, np.round(predicted)))
+    return results
 
 
 class EEGNet(nn.Module):

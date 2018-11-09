@@ -24,7 +24,7 @@ senlist_known = [
     'nd']
 match_types = ['obj', 'nomatch', 'match']
 SAMP_FREQ = 256.
-
+default_metadata_filen = 'eeg_file_metadata.csv'
 files_skip_processing = ['.DS_Store', 'README']
 
 
@@ -34,7 +34,7 @@ def pass_through(x, y, xlabel, ylabel, fs=None):
 
 def PSD_on_row_data(x, y, xlabel, ylabel, fs=None):
     f, Pxx = signal.periodogram(y, fs=(1. if fs is None else fs), axis=0)
-    return f, Pxx, 'frequency (Hz)', 'PSD (V^2/Hz)'
+    return f[1:], Pxx[1:], 'frequency (Hz)', 'PSD (V^2/Hz)'
 
 
 def fft_on_row_data(x, y, xlabel, ylabel, fs=None):  # complex2real=np.abs):
@@ -51,8 +51,9 @@ def fft_on_row_data(x, y, xlabel, ylabel, fs=None):  # complex2real=np.abs):
     # outarray = np.zeros(2 * (ncoeff - 1))
     # outarray[:(ncoeff-1)] = np.real(fft_coeff[1:])
     # outarray[(ncoeff-1):] = np.real(fft_coeff[1:])
-    return np.concatenate([-np.flip(f[1:], axis=0), f[1:]]), np.concatenate(
-        [np.imag(np.flipud(fft_coeff[1:])), np.real(fft_coeff[1:])]), 'frequency (Hz) (real / imag)', 'FFT coeff'
+    return (np.concatenate([-np.flip(f[1:], axis=0), f[1:]]), np.concatenate(
+        [np.imag(np.flipud(fft_coeff[1:])), np.real(fft_coeff[1:])]),
+        'frequency (Hz) (imag | real)', 'FFT coeff level (uV)')
 
 
 class GetClassId(dict):
@@ -63,15 +64,16 @@ class GetClassId(dict):
         super().__init__(**kwargs)
         self.next_cls_id = 0
 
-    def __get__(self, subject_id):
+    def __getitem__(self, subject_id):
         if subject_id not in self:
             self[subject_id] = self.next_cls_id
             self.next_cls_id += 1
-        return super().__get__(subject_id)
+        return super().__getitem__(subject_id)
 
 
-def get_blocked_data(files_list=None, use_onehot_cat_feat=False,
-        multiclass=False, pre_split=True, prefix_directory='./',
+def get_blocked_data(files_list=None, use_saved_meta_data=True,
+        use_onehot_cat_feat=False,
+        multiclass=False, pre_split=True, prefix_directory=None,
         process_data=pass_through, pickle_name=None, debug=1):
     """ get the data in a format convenient to torch-based
         model building and training
@@ -93,11 +95,24 @@ def get_blocked_data(files_list=None, use_onehot_cat_feat=False,
             return data
         except FileNotFoundError:
             pass
-    assert len(files_list) > 0, ('input file list is empty')
+    df_meta = None
+    if not(use_saved_meta_data):
+        assert len(files_list) > 0, ('input file list is empty')
+    else:
+        df_meta = get_all_metadata()
+        if len(files_list) == 0:
+            files_list = sample_file_list()
 
     total_files = len(files_list)
-    df, info = my_read_eeg_generic(files_list[0])
+    df, info = my_read_eeg_generic(
+        (os.sep.join([prefix_directory, files_list[0]])
+        if prefix_directory is not None else files_list[0]))
     nsamp, nsen = df.shape
+
+    assert all([(sk == sck) for sk, sck in zip(senlist_known,
+        df.columns.levels[df.columns.names.index('sensor')])]), (
+            "sensor columns are out of order, need to create a sensor index "
+            "sorting operation here...")
 
     count_train = count_test = 0
     for file in files_list:
@@ -108,16 +123,26 @@ def get_blocked_data(files_list=None, use_onehot_cat_feat=False,
             count_train += 1
 
     if multiclass:
-        print('multi-class, reading header data...')
+        if debug > 1:
+            print('multi-class labeling processing, reading header/meta data...')
         class_from_subject_id = GetClassId()
-        for file in files_list:
-            orig_tt_indic = (('test' in str.lower(file)) if pre_split else None)
-            df, info = my_read_eeg_generic(os.sep.join([prefix_directory, files_list[0]]),
-                orig_tt_indic=orig_tt_indic, header_only=True)
-            class_from_subject_id[info['subject']]
+        if df_meta is not None:
+            for file in tqdm.tqdm(files_list):
+                orig_tt_indic = (('test' in str.lower(file)) if pre_split else None)
+                df, info = my_read_eeg_generic(
+                    (os.sep.join([prefix_directory, files_list[0]])
+                    if prefix_directory is not None else files_list[0]),
+                    orig_tt_indic=orig_tt_indic, header_only=True)
+                class_from_subject_id[info['subject']]
+        else:
+            df_files = [f.split(os.sep)[-1] for f in df_meta.filename.values]
+            for file in tqdm.tqdm(files_list):
+                index = df_files.index(file.split(os.sep)[-1])
+                class_from_subject_id[df_meta.iloc[index]['subject']]
         enc_mult_id = OneHotEncoder()
         nclass = len(class_from_subject_id)
-        print(f'found {nclass} classes for multi-class id')
+        if debug > 1:
+            print(f'found {nclass} classes for multi-class id')
         enc_mult_id.fit([[subjid] for subjid in class_from_subject_id.keys()])
         if pre_split:
             ytrain = torch.zeros(count_train, nclass, dtype=torch.uint8)
@@ -147,12 +172,18 @@ def get_blocked_data(files_list=None, use_onehot_cat_feat=False,
         cat_feat_tst = []
 
     tst = trn = 0
-    iterator = tqdm.tqdm(enumerate(files_list), total=total_files)
-    iterator.set_description('reading in real-valued data...')
+    if debug == 1:
+        iterator = tqdm.tqdm(enumerate(files_list), total=total_files)
+        iterator.set_description('reading in real-valued data...')
+    else:
+        iterator = enumerate(files_list)
     for fidx, file in iterator:
         orig_tt_indic = (('test' in str.lower(file)) if pre_split else None)
 
-        full_url = os.sep.join([prefix_directory, file])
+        if prefix_directory:
+            full_url = os.sep.join([prefix_directory, file])
+        else:
+            full_url = file
         df, info = my_read_eeg_generic(full_url,
             orig_tt_indic=orig_tt_indic)
         if debug > 1:
@@ -227,15 +258,146 @@ def get_blocked_data(files_list=None, use_onehot_cat_feat=False,
                     use_onehot_cat_feat)))
         return Xtrain, ytrain, Xtest, ytest, use_onehot_cat_feat
 
-# Xtrain, ytrain, Xtest, ytest = get_blocked_data(half_half_alcoholic_all_subjects_tt_even_400,
-#         pickle_name='half_half_alcoholic_all_subjects_tt_even_400.bin')
-
-# print('Xtrain:', Xtrain.shape, '\nytrain:', ytrain.shape, '\nXtest:',  Xtest.shape, '\nytest:',  ytest.shape)
-
 
 def zero():
     """ functional zero for working with defaultdicts """
     return 0
+
+
+def get_all_metadata(data_dirs=None, metadata_file_name=default_metadata_filen,
+        df_type='wide', debug=1):
+
+    if metadata_file_name and os.path.isfile(metadata_file_name):
+        df = pd.read_csv(metadata_file_name)
+        print(f"local metadata file found: {os.path.abspath(metadata_file_name)}")
+        return df
+    assert data_dirs is not None, ('could not find metadata file and data '
+        'directories not defined')
+    total_files = 0
+    for orig_data_dir, directory in enumerate(data_dirs):
+        for subject_dir in os.listdir(directory):
+            if subject_dir in files_skip_processing:
+                continue
+            local_files = [f
+                for f in os.listdir(os.sep.join([directory, subject_dir]))
+                if f not in files_skip_processing]
+            total_files += len(local_files)
+    file_count = 0
+    df = pd.DataFrame({})
+    progress_bar = tqdm.tqdm(total=total_files, miniters=1)
+    for directory in data_dirs:
+        orig_data_dir = int(('test' in str.lower(directory)))
+        for subject_dir in os.listdir(directory):
+            if subject_dir in files_skip_processing:
+                continue
+            for file in os.listdir(os.sep.join([directory, subject_dir])):
+                if file in files_skip_processing:
+                    continue
+                if debug == 1:
+                    progress_bar.n = file_count
+                    progress_bar.set_description('accumulating file metadata')
+
+                full_file_url = os.sep.join([directory, subject_dir, file])
+                if debug > 2:
+                    print(f'read file header: {full_file_url}')
+
+                df_file, info = my_read_eeg_generic(full_file_url,
+                    df_type=df_type, orig_tt_indic=orig_data_dir,
+                    header_only=True)
+                info['filename'] = os.path.abspath(full_file_url)
+                file_count += 1
+                # if df is None:
+                #     df = pd.DataFrame({k: [] for k in info})
+                df = df.append(pd.DataFrame({k: [info[k]] for k in info}),
+                    ignore_index=True)
+    if metadata_file_name is not None:
+        df.to_csv(metadata_file_name, index=False)
+    return df
+
+
+def sample_file_list(metadata_file_name=default_metadata_filen, limitby=None,
+        limit_mult_files=None, balance_types=None, df_type='wide',
+        shuffle_limited=False, seed=None, debug=1):
+    """ select a (non-)random sample of the data according to the provided
+        constraints
+    """
+
+    balance_types_bool = (balance_types is not None)
+    if balance_types_bool:
+        balance_type_count = defaultdict(zero)
+
+    filter_files = (limitby is not None) or (balance_types_bool and (
+        limit_mult_files is not None))
+
+    if metadata_file_name and os.path.isfile(metadata_file_name):
+        df = pd.read_csv(metadata_file_name)
+    else:
+        raise FileNotFoundError('could not fine metadata file')
+
+    if not(filter_files):
+        if limit_mult_files:
+            return df.sample(n=None,
+                random_state=seed).filename.values
+        else:
+            return df.filename.values
+    else:
+        if debug > 1:
+            print('filter_settings:')
+            if limit_mult_files:
+                print(f'   limit_mult_files[{limit_mult_files}]')
+            if balance_types_bool:
+                print(f'   balance_types[{balance_types}]')
+            if limitby:
+                print(f'   limitby[{limitby}]')
+
+            print(f'initial len df: {df.shape}')
+        if limitby:
+            for k, v in limitby.items():
+                df = df[df[k].values == v]
+            if debug > 1:
+                print(f'after limitby len df: {df.shape}')
+        if not(balance_types_bool):
+            if limit_mult_files:
+                return df.sample(n=limit_mult_files,
+                    random_state=seed).filename.values
+            else:
+                return df.filename.values
+
+        if isinstance(balance_types, list):
+            balance_types = balance_types
+        else:
+            balance_types = [balance_types]
+
+        if shuffle_limited:
+            df_iter = df.sample(n=df.shape[0],
+                random_state=seed)
+        else:
+            df_iter = df
+        file_list = []
+        file_count = 0
+        if debug == 1:
+            progress_bar = tqdm.tqdm(total=limit_mult_files, miniters=1)
+        for ridx, row in df_iter.iterrows():
+            skip_file = False
+            for bt in balance_types:
+                # print('bt', bt, row)
+                key = bt[0]+str(row[bt[0]])
+                if (balance_type_count[key] <
+                        limit_mult_files/bt[1]):
+                    balance_type_count[key] += 1
+                else:
+                    skip_file = True
+                    break
+            if skip_file:
+                continue
+            file_list.append(row['filename'])
+            file_count += 1
+            if debug == 1:
+                progress_bar.n = file_count
+                progress_bar.set_description('sampling file list')
+            if file_count >= limit_mult_files:
+                break
+        return file_list
 
 
 def accumulate_subject_file_list(data_dirs, limitby=None,
@@ -273,7 +435,17 @@ def accumulate_subject_file_list(data_dirs, limitby=None,
     file_count = 0
     unique_entries = defaultdict(set)
     if filter_files:
-        filter_by_test_set = any(['is_test_set' in bt[0] for bt in balance_types])
+        filter_by_test_set = balance_types_bool and any(
+            ['is_test_set' in bt[0] for bt in balance_types])
+        if balance_types_bool:
+            if isinstance(balance_types, list):
+                balance_types = balance_types
+            else:
+                balance_types = [balance_types]
+            if limitby:
+                assert not(any([(bt[0] in limitby) for bt in balance_types])), (
+                    "cannot balance a type key for which the data is also being "
+                    "limited to in 'limitby'")
         if filter_by_test_set:
             filter_by_test_set = [bt[1] for bt in balance_types
                 if 'is_test_set' in bt[0]][0]
@@ -309,14 +481,9 @@ def accumulate_subject_file_list(data_dirs, limitby=None,
                                 next_file = True
                         if next_file:
                             continue
-                    if (balance_types_bool and not(np.isinf(limit_mult_files)) and
-                            balance_types):
-                        if isinstance(balance_types, list):
-                            bt_list = balance_types
-                        else:
-                            bt_list = [balance_types]
+                    if (balance_types_bool and not(np.isinf(limit_mult_files))):
                         skip_file = False
-                        for bt in bt_list:
+                        for bt in balance_types:
                             key = bt[0]+str(info[bt[0]])
                             if (balance_type_count[key] <
                                     limit_mult_files/bt[1]):
@@ -490,7 +657,7 @@ def import_eeg_file(file_obj, df_type='long', optimize=True,
     return df
 
 
-half_half_alcoholic_all_subjects_40 = [
+eeg_half_half_alcoholic_all_subjects_obj_40 = [
   './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.000.gz',
   './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.010.gz',
   './small_data_set/SMNI_CMI_TRAIN/co2a0000375/co2a0000375.rd.010.gz',
@@ -532,7 +699,213 @@ half_half_alcoholic_all_subjects_40 = [
   './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.028.gz',
   './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.018.gz']
 
-half_half_alcoholic_all_subjects_100 = [
+eeg_half_half_alcoholic_all_subjects_match_100 = [
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.041.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.025.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.011.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.009.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.047.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000375/co2a0000375.rd.011.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000375/co2a0000375.rd.025.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000375/co2a0000375.rd.041.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000375/co2a0000375.rd.027.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000375/co2a0000375.rd.037.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000344/co2c0000344.rd.071.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000344/co2c0000344.rd.055.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000344/co2c0000344.rd.041.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000344/co2c0000344.rd.075.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000344/co2c0000344.rd.065.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000342/co2c0000342.rd.025.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000342/co2c0000342.rd.011.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000342/co2c0000342.rd.055.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000342/co2c0000342.rd.041.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000342/co2c0000342.rd.023.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000345/co2c0000345.rd.041.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000345/co2c0000345.rd.011.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000345/co2c0000345.rd.025.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000345/co2c0000345.rd.009.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000345/co2c0000345.rd.047.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000368/co2a0000368.rd.047.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000368/co2a0000368.rd.027.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000368/co2a0000368.rd.037.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000368/co2a0000368.rd.003.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000368/co2a0000368.rd.009.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000369/co2a0000369.rd.009.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000369/co2a0000369.rd.047.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000369/co2a0000369.rd.023.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000369/co2a0000369.rd.017.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000369/co2a0000369.rd.027.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000370/co2a0000370.rd.009.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000370/co2a0000370.rd.047.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000370/co2a0000370.rd.027.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000370/co2a0000370.rd.037.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000370/co2a0000370.rd.023.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000377/co2a0000377.rd.037.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000377/co2a0000377.rd.003.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000377/co2a0000377.rd.047.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000377/co2a0000377.rd.011.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000377/co2a0000377.rd.065.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000378/co2a0000378.rd.011.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000378/co2a0000378.rd.025.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000378/co2a0000378.rd.041.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000378/co2a0000378.rd.051.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000378/co2a0000378.rd.023.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000371/co2a0000371.rd.047.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000371/co2a0000371.rd.003.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000371/co2a0000371.rd.037.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000371/co2a0000371.rd.017.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000371/co2a0000371.rd.023.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000340/co2c0000340.rd.076.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000340/co2c0000340.rd.042.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000340/co2c0000340.rd.003.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000340/co2c0000340.rd.066.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000340/co2c0000340.rd.080.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000347/co2c0000347.rd.079.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000347/co2c0000347.rd.077.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000347/co2c0000347.rd.047.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000347/co2c0000347.rd.023.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000347/co2c0000347.rd.081.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000346/co2c0000346.rd.047.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000346/co2c0000346.rd.023.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000346/co2c0000346.rd.017.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000346/co2c0000346.rd.037.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000346/co2c0000346.rd.003.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000341/co2c0000341.rd.009.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000341/co2c0000341.rd.023.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000341/co2c0000341.rd.027.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000341/co2c0000341.rd.003.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000341/co2c0000341.rd.047.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000337/co2c0000337.rd.027.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000337/co2c0000337.rd.023.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000337/co2c0000337.rd.017.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000337/co2c0000337.rd.047.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000337/co2c0000337.rd.025.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000339/co2c0000339.rd.025.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000339/co2c0000339.rd.055.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000339/co2c0000339.rd.071.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000339/co2c0000339.rd.065.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000339/co2c0000339.rd.041.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000338/co2c0000338.rd.011.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000338/co2c0000338.rd.025.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000338/co2c0000338.rd.051.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000338/co2c0000338.rd.023.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000338/co2c0000338.rd.017.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000365/co2a0000365.rd.047.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000365/co2a0000365.rd.037.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000365/co2a0000365.rd.023.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000365/co2a0000365.rd.009.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000365/co2a0000365.rd.041.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.009.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.047.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.027.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.037.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.023.gz']
+
+
+eeg_half_half_alcoholic_all_subjects_nomatch_100 = [
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.031.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.005.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.015.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.021.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.001.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000375/co2a0000375.rd.021.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000375/co2a0000375.rd.015.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000375/co2a0000375.rd.005.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000375/co2a0000375.rd.031.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000375/co2a0000375.rd.035.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000344/co2c0000344.rd.045.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000344/co2c0000344.rd.001.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000344/co2c0000344.rd.015.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000344/co2c0000344.rd.005.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000344/co2c0000344.rd.031.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000342/co2c0000342.rd.001.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000342/co2c0000342.rd.031.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000342/co2c0000342.rd.005.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000342/co2c0000342.rd.015.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000342/co2c0000342.rd.021.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000345/co2c0000345.rd.001.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000345/co2c0000345.rd.021.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000345/co2c0000345.rd.015.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000345/co2c0000345.rd.005.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000345/co2c0000345.rd.031.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000368/co2a0000368.rd.007.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000368/co2a0000368.rd.033.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000368/co2a0000368.rd.013.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000368/co2a0000368.rd.029.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000368/co2a0000368.rd.019.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000369/co2a0000369.rd.029.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000369/co2a0000369.rd.039.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000369/co2a0000369.rd.019.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000369/co2a0000369.rd.033.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000369/co2a0000369.rd.013.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000370/co2a0000370.rd.019.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000370/co2a0000370.rd.029.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000370/co2a0000370.rd.013.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000370/co2a0000370.rd.033.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000370/co2a0000370.rd.015.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000377/co2a0000377.rd.033.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000377/co2a0000377.rd.043.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000377/co2a0000377.rd.039.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000377/co2a0000377.rd.029.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000377/co2a0000377.rd.049.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000378/co2a0000378.rd.035.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000378/co2a0000378.rd.001.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000378/co2a0000378.rd.021.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000378/co2a0000378.rd.015.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000378/co2a0000378.rd.005.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000371/co2a0000371.rd.013.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000371/co2a0000371.rd.033.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000371/co2a0000371.rd.007.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000371/co2a0000371.rd.019.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000371/co2a0000371.rd.029.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000340/co2c0000340.rd.007.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000340/co2c0000340.rd.084.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000340/co2c0000340.rd.019.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000340/co2c0000340.rd.058.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000340/co2c0000340.rd.001.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000347/co2c0000347.rd.059.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000347/co2c0000347.rd.049.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000347/co2c0000347.rd.029.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000347/co2c0000347.rd.019.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000347/co2c0000347.rd.053.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000346/co2c0000346.rd.007.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000346/co2c0000346.rd.033.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000346/co2c0000346.rd.013.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000346/co2c0000346.rd.029.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000346/co2c0000346.rd.019.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000341/co2c0000341.rd.019.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000341/co2c0000341.rd.033.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000341/co2c0000341.rd.007.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000341/co2c0000341.rd.013.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000341/co2c0000341.rd.001.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000337/co2c0000337.rd.033.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000337/co2c0000337.rd.073.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000337/co2c0000337.rd.043.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000337/co2c0000337.rd.067.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000337/co2c0000337.rd.053.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000339/co2c0000339.rd.035.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000339/co2c0000339.rd.005.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000339/co2c0000339.rd.039.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000339/co2c0000339.rd.029.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000339/co2c0000339.rd.019.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000338/co2c0000338.rd.035.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000338/co2c0000338.rd.001.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000338/co2c0000338.rd.005.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000338/co2c0000338.rd.021.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2c0000338/co2c0000338.rd.015.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000365/co2a0000365.rd.043.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000365/co2a0000365.rd.033.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000365/co2a0000365.rd.049.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000365/co2a0000365.rd.029.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000365/co2a0000365.rd.039.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.049.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.059.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.019.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.039.gz',
+ './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.057.gz']
+
+
+eeg_half_half_alcoholic_all_subjects_obj_100 = [
  './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.000.gz',
  './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.010.gz',
  './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.004.gz',
@@ -634,7 +1007,7 @@ half_half_alcoholic_all_subjects_100 = [
  './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.012.gz',
  './small_data_set/SMNI_CMI_TRAIN/co2a0000364/co2a0000364.rd.002.gz']
 
-half_half_alcoholic_all_subjects_tt_even_400 = [
+eeg_half_half_alcoholic_all_subjects_obj_tt_even_400 = [
   './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.000.gz',
   './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.010.gz',
   './small_data_set/SMNI_CMI_TRAIN/co2a0000372/co2a0000372.rd.004.gz',
