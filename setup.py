@@ -19,16 +19,16 @@ setup(name='eeg_project',
       description=('Processing, plotting, and identification of EEG signals'),
       author=__author__,
       author_email=__email__,
-      # url='',
-      license='private',
+      url='https://github.com/nickrose',
+      license='MIT',
       packages=pkgs,
-      # classifiers=[
-      #     'Development Status :: 3 - Alpha',
-      #     'Intended Audience :: Developers',
-      #     'Natural Language :: English',
-      #     'Programming Language :: Python',
-      #     'Programming Language :: Python :: 3',
-      #     'Programming Language :: Python :: 3.5',
-      #     'Programming Language :: Python :: 3.6'
-      # ],
+      classifiers=[
+          'Development Status :: 3 - Alpha',
+          'Intended Audience :: Developers',
+          'Natural Language :: English',
+          'Programming Language :: Python',
+          'Programming Language :: Python :: 3',
+          'Programming Language :: Python :: 3.5',
+          'Programming Language :: Python :: 3.6'
+      ],
       )

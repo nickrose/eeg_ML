@@ -99,20 +99,26 @@ def highlight_correlated_feature_twoclass(
 
         pyplot.figure(figsize=(figsize[0]+4, 6))
         leg = []
-        pca_vec_to_plot = min(pca_vec_to_plot, nsen)
-        for idx in range(pca_vec_to_plot):
-            if idx == 0:
+        if isinstance(pca_vec_to_plot, tuple):
+            pca_vec_to_plot_count = pca_vec_to_plot[1] - pca_vec_to_plot[0]
+        else:
+            pca_vec_to_plot_count = pca_vec_to_plot
+            pca_vec_to_plot = (0, pca_vec_to_plot)
+        pca_vec_to_plot_count = min(pca_vec_to_plot_count, nsen)
+        for i, idx in enumerate(range(*pca_vec_to_plot)):
+            if i == 0:
                 clrdict = {}
-            lg, = pyplot.plot(Ua[:, idx], label='alcoholic', **clrdict)
-            if idx == 0:
+            lg, = pyplot.plot(Ua[:, idx], linewidth=2*(pca_vec_to_plot_count - i + 1),
+                label='alcoholic', **clrdict)
+            if i == 0:
                 leg.append(lg)
                 clrdict = {'color': lg.get_color()}
-        for idx in range(pca_vec_to_plot):
-            if idx == 0:
+        for i, idx in enumerate(range(*pca_vec_to_plot)):
+            if i == 0:
                 clrdict = {}
-            lg, = pyplot.plot(Una[:, idx], label='not alcoholic',
-                **clrdict)
-            if idx == 0:
+            lg, = pyplot.plot(Una[:, idx], linewidth=2*(pca_vec_to_plot_count - i + 1),
+                label='not alcoholic', **clrdict)
+            if i == 0:
                 leg.append(lg)
                 clrdict = {'color': lg.get_color()}
 
@@ -132,6 +138,7 @@ def highlight_correlated_feature_twoclass(
             f'(alcoholic-nonalcoholic) - match[{match_type}]')
         pyplot.colorbar()
         pyplot.show()
+        return Ua[:, :pca_vec_to_plot], Una[:, :pca_vec_to_plot]
 
 
 def plot_data_subject_dirs(data_dirs=None, file_list=None,
@@ -148,8 +155,20 @@ def plot_data_subject_dirs(data_dirs=None, file_list=None,
     all_data_overlaid = ('all_data_traces' in plots and
             (plots['all_data_traces'] is not None))
     printed_entry_info = False
-    assert not((data_dirs is None) and (file_list is None)), ("need to provide "
-        "one of 'data_dirs' or 'file_list'")
+    if ((data_dirs is None) and (file_list is None)):
+        if isinstance(limit_mult_files, tuple):
+            limit_mult, bal_list = limit_mult_files
+        else:
+            bal_list = None
+            limit_mult = limit_mult_files
+        if np.isinf(limit_mult):
+            limit_mult = None
+        file_list = sample_file_list(
+                limitby=limitby,
+                limit_mult_files=limit_mult,
+                balance_types=bal_list, df_type=df_type,
+                seed=42, debug=max(0, debug - 1))
+
     if file_list is None:
         file_list, unique_entries, total_files = accumulate_subject_file_list(
             data_dirs, limitby=limitby, limit_mult_files=limit_mult_files,
