@@ -6,10 +6,11 @@ import torch.nn.functional as F
 import torch.optim as optim
 from sklearn.metrics import (roc_auc_score, precision_score,
     recall_score, accuracy_score, f1_score)
-from matplotlib import pyplot
 import warnings
 import tqdm
 from eeg_project.read_data import match_types
+from eeg_project.plot_data import plot_train_results
+
 
 metric_func_lut = dict(
     acc=accuracy_score,
@@ -18,8 +19,6 @@ metric_func_lut = dict(
     precision=precision_score,
     f_1_meas=f1_score
 )
-PRF_metrics = ['recall', 'precision', 'f_1_meas']
-basic_metrics = ['acc', 'auc']
 
 
 def get_variable_learning_rate(nepochs, lr_start_log=-2,
@@ -56,9 +55,34 @@ def get_variable_learning_rate(nepochs, lr_start_log=-2,
 
 
 def train_EEG_net(data_tuple, nepochs=10, net=None, metrics2record=None,
-        regularization_param=0.2,
+        regularization_param=0.2, lr_kwargs={},
         batch_size=32, shuffle_data=True, debug=1):
+    """ wrapper for handling EEG data and calling NN 'net' model and recording
+        training results
 
+        Args:
+            data_tuple (tuple of torch Tensors and others) returned from
+                calling get_blocked_data.
+            nepochs=10
+            net=None, the network to train and return; if None, initializes
+                network with a EEGNet object (see models.py file).
+            metrics2record (list)=None, if None, replaces with
+                ['acc', 'auc', 'precision', 'recall', 'f1f_1_meas']
+            regularization_param=0.2
+            lr_kwargs={}, key-word arguments with which to call
+                get_variable_learning_rate() function.
+            batch_size=32
+            shuffle_data=True
+            debug=1
+
+        Returns:
+             net (optional) only returned if input net is None.
+             metrics2record (list) list of str types specifying which metrics
+                were recorded per epoch during training.
+             loss_metric (np.array)
+             train_metrics (np.array) nepochs X len(metrics2record)
+             test_metrics (np.array) nepochs X len(metrics2record)
+    """
     if len(data_tuple) > 5:
         multi_class = True
         X_train, y_train, X_test, y_test, uses_cat_feat, \
@@ -69,7 +93,7 @@ def train_EEG_net(data_tuple, nepochs=10, net=None, metrics2record=None,
 
     dataset = torch.utils.data.TensorDataset(X_train, y_train)
 
-    lr_start, learning_rate = get_variable_learning_rate(nepochs)
+    lr_start, learning_rate = get_variable_learning_rate(nepochs, **lr_kwargs)
     if debug > 2:
         print('learning rate start', lr_start,
             'variable learning rate vector', learning_rate)
@@ -205,53 +229,9 @@ def train_EEG_net(data_tuple, nepochs=10, net=None, metrics2record=None,
     # plot loss and other metrics
     # could use: sklearn.model_selection.learning_curve, but this
     # allows less direct control on train/test set split
-    if debug:
-        pyplot.figure(figsize=(10, 5))
-        lg, = pyplot.plot(loss_metric)
-        # if learning_rate is not None:
-        #     lg, = pyplot.plot(learning_rate)
-        pyplot.title('Loss')
-        pyplot.xlabel('Epoch')
-        pyplot.yscale('log')
-        pyplot.show()
-
-        for prm in basic_metrics:
-            if prm in metrics2record:
-                leg = []
-                pyplot.figure(figsize=(10, 5))
-                print(prm, metrics2record.index(prm))
-                lg, = pyplot.plot(train_metrics[:,
-                    metrics2record.index(prm)], label=('train'))
-                leg.append(lg)
-                lg, = pyplot.plot(test_metrics[:,
-                    metrics2record.index(prm)], label=('test'))
-                leg.append(lg)
-
-                pyplot.legend(handles=leg)
-                pyplot.title(prm)
-                pyplot.xlabel('Epoch')
-                pyplot.show()
-
-        has_prf = any([(prm in PRF_metrics) for prm in metrics2record])
-        if has_prf:
-            pyplot.figure(figsize=(10, 5))
-            leg = []
-            for prm in PRF_metrics:
-                if prm in metrics2record:
-                    lg, = pyplot.plot(train_metrics[:,
-                        metrics2record.index(prm)], label=(prm + ':train'))
-                    leg.append(lg)
-
-            for prm in PRF_metrics:
-                if prm in metrics2record:
-                    lg, = pyplot.plot(test_metrics[:,
-                        metrics2record.index(prm)], label=(prm + ':test'))
-                    leg.append(lg)
-
-            pyplot.legend(handles=leg)
-            pyplot.title('Precision / Recall')
-            pyplot.xlabel('Epoch')
-            pyplot.show()
+    # if debug:
+    #     plot_train_results(metrics2record, loss_metric,
+    #             train_metrics, test_metrics)
     if no_input_model:
         return net, metrics2record, loss_metric, train_metrics, test_metrics
     else:

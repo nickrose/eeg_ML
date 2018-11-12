@@ -4,6 +4,7 @@ from eeg_project.read_data import (my_read_eeg_generic, SAMP_FREQ,
     sample_file_list, match_types)
 import numpy as np
 import pandas as pd
+import torch
 from collections import defaultdict
 # from six import text_type
 import tqdm
@@ -11,6 +12,62 @@ from matplotlib import pyplot, cm
 # from mpl_toolkits.mplot3d import Axes3D
 # # import ipywidgets as widgets
 from IPython.display import clear_output
+
+PRF_metrics = ['recall', 'precision', 'f_1_meas']
+basic_metrics = ['acc', 'auc']
+
+
+def plot_train_results(metrics2record, loss_metric,
+        train_metrics, test_metrics):
+    """ plot some learning curves for the training results """
+    pyplot.figure(figsize=(10, 5))
+    min_, max_ = np.min(loss_metric), np.max(loss_metric)
+    lg, = pyplot.plot(loss_metric)
+    pyplot.yticks(min_ + np.arange(5) * (max_ - min_))
+    # if learning_rate is not None:
+    #     lg, = pyplot.plot(learning_rate)
+    pyplot.title('Loss')
+    pyplot.xlabel('Epoch')
+    pyplot.yscale('log')
+    pyplot.show()
+
+    for prm in basic_metrics:
+        if prm in metrics2record:
+            leg = []
+            met_idx = metrics2record.index(prm)
+            pyplot.figure(figsize=(10, 5))
+            lg, = pyplot.plot(train_metrics[:, met_idx], label=('train'))
+            leg.append(lg)
+            lg, = pyplot.plot(test_metrics[:, met_idx], label=('test'))
+            leg.append(lg)
+
+            pyplot.legend(handles=leg)
+            pyplot.title(prm)
+            pyplot.xlabel('Epoch')
+            pyplot.show()
+
+    has_prf = any([(prm in PRF_metrics) for prm in metrics2record])
+    if has_prf:
+        pyplot.figure(figsize=(10, 5))
+        leg = []
+        for prm in PRF_metrics:
+            if prm in metrics2record:
+                met_idx = metrics2record.index(prm)
+                lg, = pyplot.plot(train_metrics[:, met_idx],
+                    label=(prm + ':train'))
+                leg.append(lg)
+
+        for prm in PRF_metrics:
+            if prm in metrics2record:
+                met_idx = metrics2record.index(prm)
+                lg, = pyplot.plot(test_metrics[:, met_idx],
+                    label=(prm + ':test'))
+                leg.append(lg)
+
+        pyplot.legend(handles=leg)
+        pyplot.title('Precision / Recall')
+        pyplot.xlabel('Epoch')
+        pyplot.show()
 
 
 def highlight_correlated_feature_twoclass(
@@ -97,7 +154,7 @@ def highlight_correlated_feature_twoclass(
             f'- match[{match_type}]')
         pyplot.show()
 
-        pyplot.figure(figsize=(figsize[0]+4, 6))
+        pyplot.figure(figsize=(figsize[0]+4, 8))
         leg = []
         is_slice = isinstance(pca_vec_to_plot, tuple)
         if is_slice:
@@ -107,31 +164,26 @@ def highlight_correlated_feature_twoclass(
             pca_vec_to_plot = (0, pca_vec_to_plot)
         pca_vec_to_plot_count = min(pca_vec_to_plot_count, nsen)
         for i, idx in enumerate(range(*pca_vec_to_plot)):
-            if i == 0:
-                clrdict = {}
-            lg, = pyplot.plot(Ua[:, idx], ':',
-                linewidth=2*(pca_vec_to_plot_count - i + 1),
-                alpha=1. - i/20,
-                label='alcoholic', **clrdict)
-            if i == 0:
-                leg.append(lg)
-                clrdict = {'color': lg.get_color()}
+            lg, = pyplot.plot(-i + Ua[:, idx], '-',
+                linewidth=2,
+                label=f'feat[{idx}]: alcoholic')
+            leg.append(lg)
         for i, idx in enumerate(range(*pca_vec_to_plot)):
-            if i == 0:
-                clrdict = {}
-            lg, = pyplot.plot(Una[:, idx], ':',
-                linewidth=2*(pca_vec_to_plot_count - i + 1),
-                alpha=1. - i/20,
-                label='not alcoholic', **clrdict)
-            if i == 0:
-                leg.append(lg)
-                clrdict = {'color': lg.get_color()}
+            lg, = pyplot.plot(-i + Una[:, idx], '--',
+                linewidth=2,
+                label=f'feat[{idx}]: not alcoholic')
+            leg.append(lg)
 
-        pyplot.xticks(np.arange(nsen), sen_names)
+        pyplot.xticks(np.arange(nsen), sen_names, fontsize=7)
+        pyplot.xlim((0, nsen + 10))
+        pyplot.yticks(-np.arange(pca_vec_to_plot_count), [
+            f'PCA_dim[{i}]' for i in np.arange(pca_vec_to_plot_count)])
         pyplot.legend(handles=leg)
         # pyplot.xticks(np.arange(nsen), sen_names)
         # pyplot.yticks(np.arange(nsen), reversed(sen_names))
-        pyplot.title(f'PCA decomposition: singular vectors {pca_vec_to_plot} '
+        ind_str = (f"{pca_vec_to_plot[0]} to {pca_vec_to_plot[1]-1}" if is_slice
+            else f"- first {pca_vec_to_plot_count}")
+        pyplot.title(f'PCA decomposition: singular vectors {ind_str} '
             f'- across sensors {data_type} - '
             f'match[{match_type}]')
 
@@ -147,7 +199,7 @@ def highlight_correlated_feature_twoclass(
             return Ua[:, pca_vec_to_plot[0]:pca_vec_to_plot[1]], Una[:,
                 pca_vec_to_plot[0]:pca_vec_to_plot[1]]
         else:
-            return Ua[:, :pca_vec_to_plot], Una[:, :pca_vec_to_plot]
+            return Ua[:, :pca_vec_to_plot_count], Una[:, :pca_vec_to_plot_count]
 
 
 def plot_data_subject_dirs(data_dirs=None, file_list=None,

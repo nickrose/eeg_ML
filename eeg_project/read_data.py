@@ -126,8 +126,9 @@ def get_blocked_data(files_list=None, use_saved_meta_data=True,
         try:
             with open(pickle_name, 'rb') as block_data:
                 data = pickle.loads(block_data.read())
-            print('reading binary of organized data from: '
-                f'{os.path.abspath(pickle_name)}')
+            print('reading binary of organized data from:\n   '
+                f'.{os.sep}'
+                f'{os.sep.join(os.path.abspath(pickle_name).split(os.sep)[-2:])}')
             print('\n   ' + '\n   '.join([f'{name}:{ditem.shape}'
                        for ditem, name in zip(
                            list(data)[:4],
