@@ -6,6 +6,7 @@ import gzip
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.model_selection import StratifiedShuffleSplit
 import torch
+import torch.utils.data
 import pickle
 import os
 from collections import defaultdict
@@ -30,17 +31,32 @@ large_dataset_prefix = 'large_data_set'
 
 
 def pass_through(x, y, xlabel, ylabel, fs=None):
+    """ convenience placeholder function """
     return x, y, xlabel, ylabel
 
 
 def PSD_on_row_data(x, y, xlabel, ylabel, fs=None):
+    """ get the PSD of the input data
+    """
     f, Pxx = signal.periodogram(y, fs=(1. if fs is None else fs), axis=0)
     return f[1:], Pxx[1:], 'frequency (Hz)', 'PSD (V^2/Hz)'
 
 
 def fft_on_row_data(x, y, xlabel, ylabel, fs=None):  # complex2real=np.abs):
-    """ get the fft of the data, by default complex2real
-        produces the magnitude, but could also use np.real
+    """ get the fft of the data, returns
+        [np.imag() (nsamp/2), np.real() (nsamp/2)]
+        concatenated together
+
+        Args and Returns:
+            x, y, xlabel, ylabel, fs
+            fs - the sampling frequency
+        Returns:
+            x - array of columns of indepdent variable corresponding to the of
+                rows of y
+            y - len(x) X N matrix of values, column dimneion is many sensors of
+                a similar type
+            xlabel - text explaining what indep variable is
+            ylabel - text explaining
     """
     fft_coeff = np.fft.rfft(y, axis=0)
     ncoeff = fft_coeff.shape[0]
@@ -48,10 +64,6 @@ def fft_on_row_data(x, y, xlabel, ylabel, fs=None):  # complex2real=np.abs):
         f = fs/2 * np.arange(0, ncoeff) / ncoeff
     else:
         f = 0.5 * np.arange(0, ncoeff) / ncoeff
-    # return f[1:], complex2real(fft_coeff[1:]), 'frequency (Hz)', 'FFT coeff'
-    # outarray = np.zeros(2 * (ncoeff - 1))
-    # outarray[:(ncoeff-1)] = np.real(fft_coeff[1:])
-    # outarray[(ncoeff-1):] = np.real(fft_coeff[1:])
     return (np.concatenate([-np.flip(f[1:], axis=0), f[1:]]), np.concatenate(
         [np.imag(np.flipud(fft_coeff[1:])), np.real(fft_coeff[1:])]),
         'frequency (Hz) (imag | real)', 'FFT coeff level (uV)')
@@ -73,11 +85,39 @@ class GetClassId(dict):
 
 
 def get_blocked_data(files_list=None, use_saved_meta_data=True,
-        use_onehot_cat_feat=False,
-        multiclass=False, pre_split=True, prefix_directory=None,
-        process_data=pass_through, pickle_name=None, debug=1):
+        use_onehot_cat_feat=False, multiclass=False, pre_split=True,
+        prefix_directory=None, process_data=pass_through, pickle_name=None,
+        debug=1):
     """ get the data in a format convenient to torch-based
         model building and training
+
+        Args:
+            files_list=None, list of files for which to retreive training/test
+                data. If none, will attempt to retreive file names using
+                'get_all_metadata()' function in this file (if
+                use_saved_meta_data=True).
+            use_saved_meta_data=True, use saved metadata to retrieve file names.
+            use_onehot_cat_feat=False, encode one-hot features for the 'match'
+                field of the EEG experiemental subject data.
+            multiclass=False, whether to identify only subject bivariate class
+                (alcoholic=True or False) vs subject ID (when multiclass=True).
+            pre_split=True, if True, indicates using the pre-defined split data
+                in the SMNI_CMI_TRAIN/SMNI_CMI_TEST folders, else, a random
+                stratified shuffled split can be using on the accumulated data.
+            prefix_directory=None, if the files in files_list need additional
+                help being located.
+            process_data=pass_through, can pass a function which takes
+                and returns `x, y, xlabel, ylabel, fs`.
+            pickle_name=None, name of saved binary file / filename to which
+                data should be saved.
+            debug=1, debug output level.
+        Returns:
+            Xtrain, Xtest, (N_trials, 1, n_samples, n_sensors)
+            ytrain, ytest, (N_trials)
+            use_onehot_cat_feat, bool indicating whether one-hot encoded
+                categorical features were including in the data set.
+            class_from_subject_id (optional if multiclass=True), dict of subject
+                names to numerical class ID.
     """
     assert not((files_list is None) and (pickle_name is None)), (
         "both files_list and pickle_name cannot be undefined")
@@ -86,13 +126,15 @@ def get_blocked_data(files_list=None, use_saved_meta_data=True,
         try:
             with open(pickle_name, 'rb') as block_data:
                 data = pickle.loads(block_data.read())
-            print('reading binary of organized data')
+            print('reading binary of organized data from: '
+                f'{os.path.abspath(pickle_name)}')
             print('\n   ' + '\n   '.join([f'{name}:{ditem.shape}'
                        for ditem, name in zip(
                            list(data)[:4],
                            ['Xtrain', 'ytrain', 'Xtest', 'ytest'])]))
             if len(data) > 5:
-                print(f'   is multi-class: {len(data) > 5} [{len(data[5])}-class]')
+                print(f'   is multi-class: {len(data) > 5}',
+                    (f' [{len(data[5])}-class]' if len(data) > 5 else ''))
             print(f'   use 1-hot categorical feats: {data[4]}')
             return data
         except FileNotFoundError:
@@ -198,47 +240,35 @@ def get_blocked_data(files_list=None, use_saved_meta_data=True,
             if orig_tt_indic:
                 Xtest[tst, :, :nsamp, :] = torch.from_numpy(Z)
                 if multiclass:
-                    ytest[tst, :] = torch.from_numpy(enc_mult_id.transform(info['subject']))
+                    ytest[tst, :] = torch.from_numpy(enc_mult_id.transform([[info['subject']]]).toarray())
                 else:
                     ytest[tst] = int(info['alcoholic'])
                 if use_onehot_cat_feat:
-                    # cat_feat_tst.append(info['match'])
                     enc_feat = enc_cat_features.transform([[info['match']]]).toarray()
                     Xtest[tst, :, nsamp, :ncat_feat] = torch.from_numpy(enc_feat)
                 tst += 1
             else:
                 Xtrain[trn, :, :nsamp, :] = torch.from_numpy(Z)
                 if multiclass:
-                    ytrain[trn, :] = torch.from_numpy(enc_mult_id.transform(info['subject']))
+                    # print('multi class enc label', enc_mult_id.transform(info['subject']).toarray())
+                    ytrain[trn, :] = torch.from_numpy(enc_mult_id.transform([[info['subject']]]).toarray())
                 else:
                     ytrain[trn] = int(info['alcoholic'])
                 if use_onehot_cat_feat:
-                    # cat_feat_trn.append(info['match'])
                     enc_feat = enc_cat_features.transform([[info['match']]]).toarray()
                     Xtrain[trn, :, nsamp, :ncat_feat] = torch.from_numpy(enc_feat)
                 trn += 1
         else:
             Xdata[fidx, :, :nsamp, :] = torch.from_numpy(Z)
             if multiclass:
-                ylabels[fidx, :] = torch.from_numpy(enc_mult_id.transform(info['subject']))
+                ylabels[fidx, :] = torch.from_numpy(enc_mult_id.transform([[info['subject']]]).toarray())
                 simple_class_id[fidx] = class_from_subject_id[info['subject']]
             else:
                 ylabels[fidx] = simple_class_id[fidx] = int(info['alcoholic'])
 
             if use_onehot_cat_feat:
-                # cat_feat_list.append(info['match'])
                 enc_feat = enc_cat_features.transform([[info['match']]]).toarray()
-                Xdata[fidx, :, nsamp, :ncat_feat] = torch.from_numpy(enc_feat)  # .reshape(1, 1, 1, 3)
-
-    # if use_onehot_cat_feat:
-    #     if pre_split:
-    #         enc_feat = enc_cat_features.transform([[match_type] for match_type in cat_feat_trn])
-    #         Xtrain[:, 0, nsamp, nsen:(nsen + ncat_feat)] = torch.from_numpy(enc_feat)
-    #         enc_feat = enc_cat_features.transform([[match_type] for match_type in cat_feat_tst])
-    #         Xtest[:, 0, nsamp, nsen:(nsen + ncat_feat)] = torch.from_numpy(enc_feat)
-    #     else:
-    #         enc_feat = enc_cat_features.transform([[match_type] for match_type in cat_feat_list])
-    #         Xdata[:, 0, nsamp, nsen:(nsen + ncat_feat)] = torch.from_numpy(enc_feat)
+                Xdata[fidx, :, nsamp, :ncat_feat] = torch.from_numpy(enc_feat)
 
     if not(pre_split):
         ss_split = StratifiedShuffleSplit(n_splits=1, test_size=0.5, random_state=42)
@@ -317,8 +347,7 @@ def get_all_metadata(data_dirs=None, metadata_file_name=default_metadata_filen,
                     header_only=True)
                 info['filename'] = os.path.abspath(full_file_url)
                 file_count += 1
-                # if df is None:
-                #     df = pd.DataFrame({k: [] for k in info})
+
                 df = df.append(pd.DataFrame({k: [info[k]] for k in info}),
                     ignore_index=True)
     if metadata_file_name is not None:

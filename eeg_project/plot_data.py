@@ -17,7 +17,9 @@ def highlight_correlated_feature_twoclass(
         file_samples=100,
         match_types_in=match_types, figsize=(12, 14),
         process_data=None, pca_vec_to_plot=5, debug=1):
-    """ sub-sample the data set and plot correlation information """
+    """ sub-sample the data set and plot correlation and dominant (PCA) feature weight
+        information
+    """
     corr_accum = None
     if process_data is not None:
         data_type = '(frqeuency)'
@@ -83,7 +85,7 @@ def highlight_correlated_feature_twoclass(
         Una, svs_na, Vna = np.linalg.svd(cov_nonalch, full_matrices=False,
             compute_uv=True)
         print('SVec size', Una.shape)
-        # print(svs_a)
+
         pyplot.figure(figsize=(figsize[0], 6))
         leg = []
         lg, = pyplot.plot(svs_a, label='alcoholic')
@@ -91,15 +93,14 @@ def highlight_correlated_feature_twoclass(
         lg, = pyplot.plot(svs_na, label='not alcoholic')
         leg.append(lg)
         pyplot.legend(handles=leg)
-        # pyplot.xticks(np.arange(nsen), sen_names)
-        # pyplot.yticks(np.arange(nsen), reversed(sen_names))
         pyplot.title(f'PCA decomposition: SVs - across sensors {data_type} - '
             f'- match[{match_type}]')
         pyplot.show()
 
         pyplot.figure(figsize=(figsize[0]+4, 6))
         leg = []
-        if isinstance(pca_vec_to_plot, tuple):
+        is_slice = isinstance(pca_vec_to_plot, tuple)
+        if is_slice:
             pca_vec_to_plot_count = pca_vec_to_plot[1] - pca_vec_to_plot[0]
         else:
             pca_vec_to_plot_count = pca_vec_to_plot
@@ -108,7 +109,9 @@ def highlight_correlated_feature_twoclass(
         for i, idx in enumerate(range(*pca_vec_to_plot)):
             if i == 0:
                 clrdict = {}
-            lg, = pyplot.plot(Ua[:, idx], linewidth=2*(pca_vec_to_plot_count - i + 1),
+            lg, = pyplot.plot(Ua[:, idx], ':',
+                linewidth=2*(pca_vec_to_plot_count - i + 1),
+                alpha=1. - i/20,
                 label='alcoholic', **clrdict)
             if i == 0:
                 leg.append(lg)
@@ -116,7 +119,9 @@ def highlight_correlated_feature_twoclass(
         for i, idx in enumerate(range(*pca_vec_to_plot)):
             if i == 0:
                 clrdict = {}
-            lg, = pyplot.plot(Una[:, idx], linewidth=2*(pca_vec_to_plot_count - i + 1),
+            lg, = pyplot.plot(Una[:, idx], ':',
+                linewidth=2*(pca_vec_to_plot_count - i + 1),
+                alpha=1. - i/20,
                 label='not alcoholic', **clrdict)
             if i == 0:
                 leg.append(lg)
@@ -126,8 +131,8 @@ def highlight_correlated_feature_twoclass(
         pyplot.legend(handles=leg)
         # pyplot.xticks(np.arange(nsen), sen_names)
         # pyplot.yticks(np.arange(nsen), reversed(sen_names))
-        pyplot.title(f'PCA decomposition: first {pca_vec_to_plot} '
-            f'singular vectors - across sensors {data_type} - '
+        pyplot.title(f'PCA decomposition: singular vectors {pca_vec_to_plot} '
+            f'- across sensors {data_type} - '
             f'match[{match_type}]')
 
         pyplot.figure(figsize=figsize)
@@ -138,7 +143,11 @@ def highlight_correlated_feature_twoclass(
             f'(alcoholic-nonalcoholic) - match[{match_type}]')
         pyplot.colorbar()
         pyplot.show()
-        return Ua[:, :pca_vec_to_plot], Una[:, :pca_vec_to_plot]
+        if is_slice:
+            return Ua[:, pca_vec_to_plot[0]:pca_vec_to_plot[1]], Una[:,
+                pca_vec_to_plot[0]:pca_vec_to_plot[1]]
+        else:
+            return Ua[:, :pca_vec_to_plot], Una[:, :pca_vec_to_plot]
 
 
 def plot_data_subject_dirs(data_dirs=None, file_list=None,
@@ -207,9 +216,6 @@ def plot_data_subject_dirs(data_dirs=None, file_list=None,
         legd = []
         running_min_max = (np.inf, -np.inf)
         if debug == 1:
-            # try:
-            #     progress_bar = tqdm.tqdm_notebook(total=total_files, miniters=1)
-            # except:
             progress_bar = tqdm.tqdm(total=total_files, miniters=1)
     else:
         legd = None
@@ -234,7 +240,7 @@ def plot_data_subject_dirs(data_dirs=None, file_list=None,
         else:
             clear_output()
 
-        full_file_url = file  # os.sep.join(file)
+        full_file_url = file
         if debug > 1:
             print(f'read file: {full_file_url}')
 
@@ -265,7 +271,6 @@ def plot_data_subject_dirs(data_dirs=None, file_list=None,
         time = np.arange(nsamp) / SAMP_FREQ
         x_data, Z, xlabel, ylabel = process_data(time, Z, 'time (s)',
             'voltage (uV)', fs=SAMP_FREQ)
-        # nsamp, nsen = Z.shape
         if all_data_overlaid and force_axes_same_scale:
             running_min_max = (min(Z.min(), running_min_max[0]),
                 max(Z.max(), running_min_max[1]))
@@ -310,7 +315,7 @@ def plot_data_subject_dirs(data_dirs=None, file_list=None,
             # if minmax[1]/(minmax[0] if minmax[0] > 0 else 1.) > 1e1:
         #             pyplot.axes().set_xscale('log', basex=2)
             pyplot.title(f'Sensor: {plots["all_data_traces"]}', fontsize=15)
-        pyplot.legend(handles=legd, fontsize=15)  # , loc='lower right')
+        pyplot.legend(handles=legd, fontsize=15)
         pyplot.show()
     if debug and not(printed_entry_info):
         print('unique entries in metadata from file accumulation')
@@ -339,7 +344,6 @@ def plot_grid(x_data, Z, xlabel, ylabel, senlist,
     nsen = len(senlist)
     all_data_overlaid = (id is not None) and (legend is not None)
     grid_base_sz = int(np.ceil(np.sqrt(nsen)))
-    # yscale = ('log' if 'Hz' in xlabel else 'linear')
 
     if grid_square:
         ncols = nrows = grid_base_sz
@@ -355,7 +359,6 @@ def plot_grid(x_data, Z, xlabel, ylabel, senlist,
                 clrdict = {'color': color_dict[id]}
             else:
                 clrdict = {}
-            # print('sizes x_data, Z', x_data.shape, Z.shape)
             lg, = pyplot.plot(x_data, Z[:, sen_i],
                 '-', label=id, alpha=transparency, **clrdict)
             if id not in color_dict:
@@ -365,7 +368,6 @@ def plot_grid(x_data, Z, xlabel, ylabel, senlist,
                 pyplot.ylim((minv, maxv))
             if multi_trace_plot_labels:
                 pyplot.title(sen, fontdict=dict(size=10))
-                # pyplot.tick_params(axis='y', which='major', labelsize=7)
                 if ncols == 1 or (coli == grid_base_sz//2 and
                         rowi == grid_base_sz):
                     pyplot.xlabel(xlabel)
@@ -421,6 +423,7 @@ def plot_grid(x_data, Z, xlabel, ylabel, senlist,
 
 def plot_3d(x_data, y_data, Z, df, xlabel, ylabel, xrange=None,
             yrange=None, figsize=(12, 12)):
+        """ plot a 3-d version of the samples X sensors EEG data """
         fig = pyplot.figure(figsize=figsize)
         ax = fig.add_subplot(111, projection='3d')
         nsamp, nsen = Z.shape
@@ -433,11 +436,9 @@ def plot_3d(x_data, y_data, Z, df, xlabel, ylabel, xrange=None,
                 nsen, axis=1),
             np.repeat(np.matrix(y_data), nsamp, axis=0),
             df.values,
-            cmap=cm.coolwarm)  # , rcount=270, ccount=270)
+            cmap=cm.coolwarm)
         pyplot.xlabel(xlabel)
         pyplot.ylabel('Sensor name')
-        # zscale = ('log' if 'Hz' in xlabel else 'linear')
-        # pyplot.zscale(zscale)
         ax.set_zlabel(ylabel)
         ax.view_init(elev=45., azim=-130)
         ax.tick_params(axis='y', which='major', labelsize=4)
@@ -456,7 +457,7 @@ def plot_all_overlaid(x_data, Z, xlabel, ylabel, sen_list, figsize=(12, 14),
     if not(all_data_overlaid):
         pyplot.figure(figsize=figsize)
         legend = []
-    # yscale = ('log' if 'Hz' in xlabel else 'linear')
+
     for sen_i, sen in enumerate(sen_list):
         if all_data_overlaid:
             if sen == plot_sensor:
@@ -483,13 +484,10 @@ def plot_all_overlaid(x_data, Z, xlabel, ylabel, sen_list, figsize=(12, 14),
                 lg, = pyplot.plot(x_data, median_trace, '--',
                     label='median', linewidth=5)
 
-#             legend.append(lg)
             pyplot.xlabel(xlabel, fontsize=14)
             pyplot.ylabel(ylabel, fontsize=15)
-            # pyplot.yscale(yscale)
-            # if minmax[1]/(minmax[0] if minmax[0] > 0 else 1.) > 1e1:
-#             pyplot.axes().set_xscale('log', basex=2)
-            pyplot.legend(handles=legend, fontsize=7)  # , loc='lower right')
+
+            pyplot.legend(handles=legend, fontsize=7)
             pyplot.title('Sensor traces', fontsize=15)
 
     if yscale:

@@ -11,7 +11,8 @@ I used a folder name 'large_data_set' in which you can find extracted SMNI_CMI_T
 and SMNI_CMI_TEST folders. Using this setup allows some of the pre-defined
 metadata fetching to work correctly, e.g., `sample_file_list()`.
 
-First make sure to run `python setup.py develop` in the from the `eeg_ML` folder.
-Then try running the `explore-EEG_data.ipynb` Jupyter notebook. The other notebooks
+First make sure to run `python setup.py develop` in the from the `eeg_ML` folder, this
+should attempt to install all required packages. Then try running the
+`explore-EEG_data.ipynb` Jupyter notebook. The other notebooks
 provide some further exploration of features as well as running the
 classification approaches that I applied.
