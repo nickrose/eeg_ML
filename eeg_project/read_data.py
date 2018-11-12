@@ -1,4 +1,4 @@
-""" EEG file read functions. Returns pandas dataframe """
+""" EEG file read functions. Returns pandas dataframes or torch.Tensor tuples """
 # needed to add imports
 import pandas as pd
 import numpy as np
