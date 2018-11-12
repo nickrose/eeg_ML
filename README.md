@@ -1,6 +1,6 @@
 # EEG_ML
 Some basic functionality for reading, plotting, and processing EEG data and
-performing classification with a couple of different methods. Relies on
+performing classification with a couple of different methods.
 
 The read functionality here is designed to work with the data available at
 https://archive.ics.uci.edu/ml/datasets/eeg+database
