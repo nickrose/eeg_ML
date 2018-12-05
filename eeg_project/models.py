@@ -229,9 +229,9 @@ def train_EEG_net(data_tuple, nepochs=10, net=None, metrics2record=None,
     # plot loss and other metrics
     # could use: sklearn.model_selection.learning_curve, but this
     # allows less direct control on train/test set split
-    # if debug:
-    #     plot_train_results(metrics2record, loss_metric,
-    #             train_metrics, test_metrics)
+    if debug:
+        plot_train_results(metrics2record, loss_metric,
+                train_metrics, test_metrics)
     if no_input_model:
         return net, metrics2record, loss_metric, train_metrics, test_metrics
     else:
@@ -330,6 +330,7 @@ class EEGNet(nn.Module):
         self.T = T
         self.C = C
         self.ncat_feat = ncat_feat
+        self.noutput_final = noutput_final
 
         # Layer 1
         self.conv1 = nn.Conv2d(1, 16, (1, C), padding=0)
@@ -353,10 +354,14 @@ class EEGNet(nn.Module):
         # FC Layer
         # NOTE: This dimension will depend on the number of samples
         interconnected_fc_nodes = T//2 + ncat_feat
-        self.fc1 = nn.Linear(interconnected_fc_nodes,
-            # 2 + interconnected_fc_nodes)
-            noutput_final)
-        # self.fc2 = nn.Linear(2 + interconnected_fc_nodes, noutput_final)
+        # if self.noutput_final == 1:
+        self.fc1 = nn.Linear(interconnected_fc_nodes, noutput_final)
+        # else:
+        #     self.fc1 = nn.Linear(interconnected_fc_nodes,
+        #         2 * interconnected_fc_nodes)
+        #     self.batchnorm_multi_class = nn.BatchNorm1d(
+        #         2 * interconnected_fc_nodes, False)
+        #     self.fc2 = nn.Linear(2 * interconnected_fc_nodes, noutput_final)
 
     def forward(self, x):
         # subselect_real_features
@@ -390,9 +395,10 @@ class EEGNet(nn.Module):
         if self.ncat_feat:
             # print('net shapes', x.shape, cat_feat.shape)
             x = torch.cat([x, cat_feat.reshape(batch_size, 3)], 1)
-
+        # if self.noutput_final == 1:
         x = torch.sigmoid(self.fc1(x))
-        # x = F.elu(self.fc1(x))
-        # x = self.batchnorm1(x)
-        # x = torch.sigmoid(self.fc2(x))
+        # else:
+        #     x = F.elu(self.fc1(x))
+        #     x = self.batchnorm_multi_class(x)
+        #     x = torch.sigmoid(self.fc2(x))
         return x

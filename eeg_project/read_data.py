@@ -25,7 +25,7 @@ senlist_known = [
     'nd']
 match_types = ['obj', 'nomatch', 'match']
 SAMP_FREQ = 256.
-default_metadata_filen = 'eeg_file_metadata.csv'
+default_metadata_filen = './eeg_file_metadata.csv'
 files_skip_processing = ['.DS_Store', 'README']
 large_dataset_prefix = 'large_data_set'
 
@@ -369,11 +369,10 @@ def sample_file_list(metadata_file_name=default_metadata_filen, limitby=None,
 
     filter_files = (limitby is not None) or (balance_types_bool and (
         limit_mult_files is not None))
-
     if metadata_file_name and os.path.isfile(metadata_file_name):
         df = pd.read_csv(metadata_file_name)
     else:
-        raise FileNotFoundError('could not fine metadata file')
+        raise FileNotFoundError('could not find metadata file')
 
     if not(filter_files):
         if limit_mult_files:
