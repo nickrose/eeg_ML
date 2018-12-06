@@ -157,21 +157,6 @@ def train_EEG_net(data_tuple, nepochs=10, net=None, metrics2record=None,
 
             running_loss = 0.0
 
-            # more basic batching approach
-            # if False:
-            #     np.random.shuffle(order)
-            #     for i in np.arange(len(X_train)//batch_size-1, dtype=int):
-            #         s = i*batch_size
-            #         e = i*batch_size+batch_size
-            #         if isinstance(X_train, torch.Tensor):
-            #             train_inputs = X_train[order[s:e]]
-            #             train_labels = torch.FloatTensor(np.array(y_train[order[s:e]].numpy()).T * 1.0)
-            #         else:
-            #             train_inputs = torch.from_numpy(X_train[order[s:e]])
-            #             train_labels = torch.FloatTensor(np.array([y_train[order[s:e]]]).T * 1.0)
-            #         # wrap them in Variable
-            #         train_inputs, train_labels = Variable(train_inputs), Variable(train_labels)
-
             # use the 'loader' object for batching (shuffling)
             for train_inputs, train_labels in loader:
 
@@ -181,21 +166,23 @@ def train_EEG_net(data_tuple, nepochs=10, net=None, metrics2record=None,
                 train_inputs = Variable(train_inputs)
                 train_labels = Variable(
                     torch.FloatTensor(np.array(train_labels.numpy()) * 1.0))
-                # forward + backward + optimize
+                # (forward) + backward + optimize
                 outputs = net(train_inputs)
 
                 if multi_class:
-                    # train_labels = Variable(torch.LongTensor(
-                    #     torch.max(train_labels, 1))[1])
-                    # print('train_labels', train_labels.shape)
-                    # print(outputs.shape, (torch.max(train_labels, 1)[1]).shape)
-                    # print(outputs, Variable((torch.max(train_labels, 1))[1]))
+                    if debug > 1:
+                        print('train_labels', train_labels.shape)
+                        print(outputs.shape, (torch.max(train_labels, 1)[1]).shape)
+                        print(outputs, Variable((torch.max(train_labels, 1))[1]))
                     loss = criterion(outputs, Variable(torch.LongTensor(
                         torch.max(train_labels, 1)[1])))
                 else:
                     loss = criterion(outputs, train_labels)
-                # forward + backward + optimize
+
+                # forward + (backward) + optimize
                 loss.backward()
+
+                # forward + backward + (optimize)
                 optimizer.step()
 
                 running_loss += loss.data[0]
