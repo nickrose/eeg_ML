@@ -185,7 +185,7 @@ def train_EEG_net(data_tuple, nepochs=10, net=None, metrics2record=None,
                 # forward + backward + (optimize)
                 optimizer.step()
 
-                running_loss += loss.data[0]
+                running_loss += loss.data  # [0] <- remove for upgrade from 0.4.1 to 1.0.1
 
             loss_metric[epoch] = running_loss
 

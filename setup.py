@@ -2,7 +2,7 @@
 """Setup package."""
 # See https://packaging.python.org/distributing/
 # and https://github.com/pypa/sampleproject/blob/master/setup.py
-__version__, __author__, __email__ = ('0.1', 'Nick Roseveare',
+__version__, __author__, __email__ = ('0.1.0', 'Nick Roseveare',
     'nicholasroseveare@gmail.com')
 # parse_requirements() returns generator of pip.req.InstallRequirement objects
 try:
